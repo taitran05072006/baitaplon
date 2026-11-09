@@ -1,6 +1,6 @@
 services:
   backend:
-    image: ${DOCKERHUB_USERNAME}/backend:latest
+    image: ${DOCKERHUB_USERNAME}/backend:${IMAGE_TAG}
     container_name: taitran-backend
     ports:
       - "8080:8080"
@@ -16,7 +16,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: ${DOCKERHUB_USERNAME}/taitran-frontend:latest
+    image: ${DOCKERHUB_USERNAME}/frontend:${IMAGE_TAG}
     container_name: taitran-frontend
     ports:
       - "5174:80"
