@@ -217,18 +217,22 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
 
-          source: "Compose.yaml,nginx/nginx.conf"
+          source: "compose.yaml,nginx/nginx.conf"
           target: "/opt/ontap"
           overwrite: true
 
       # 5. Triển khai ứng dụng
       - name: Deploy application
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
+          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN
 
           script: |
             set -eu
@@ -246,41 +250,49 @@ jobs:
               exit 1
             fi
 
+            # Authenticate the VM before pulling private application images.
+            if ! printf '%s' "$DOCKERHUB_TOKEN" | docker login \
+              --username "$DOCKERHUB_USERNAME" \
+              --password-stdin; then
+              echo "ERROR: Docker Hub authentication failed."
+              exit 1
+            fi
+
             # Kiểm tra cấu hình Compose
-            if ! docker compose --env-file .env -f Compose.yaml config -q; then
+            if ! docker compose --env-file .env -f compose.yaml config -q; then
               echo "ERROR: Docker Compose configuration is invalid."
               exit 1
             fi
 
             # Pull image từ Docker Hub
-            if ! docker compose --env-file .env -f Compose.yaml pull; then
+            if ! docker compose --env-file .env -f compose.yaml pull; then
               echo "ERROR: Failed to pull Docker images."
               exit 1
             fi
 
             # Kiểm tra cấu hình Nginx trước khi cập nhật
-            if ! docker compose --env-file .env -f Compose.yaml run --rm --no-deps nginx nginx -t; then
+            if ! docker compose --env-file .env -f compose.yaml run --rm --no-deps nginx nginx -t; then
               echo "ERROR: Nginx configuration is invalid."
               exit 1
             fi
 
             # Cập nhật container
-            if ! docker compose --env-file .env -f Compose.yaml up \
+            if ! docker compose --env-file .env -f compose.yaml up \
               --detach \
               --remove-orphans \
               --pull never \
               --no-build; then
 
               echo "ERROR: Docker Compose deployment failed."
-              docker compose --env-file .env -f Compose.yaml ps
-              docker compose --env-file .env -f Compose.yaml logs --tail=100
+              docker compose --env-file .env -f compose.yaml ps
+              docker compose --env-file .env -f compose.yaml logs --tail=100
               exit 1
             fi
 
             # Reload Nginx để nhận cấu hình mới
-            if ! docker compose --env-file .env -f Compose.yaml exec -T nginx nginx -s reload; then
+            if ! docker compose --env-file .env -f compose.yaml exec -T nginx nginx -s reload; then
               echo "ERROR: Nginx reload failed."
-              docker compose --env-file .env -f Compose.yaml logs --tail=100 nginx
+              docker compose --env-file .env -f compose.yaml logs --tail=100 nginx
               exit 1
             fi
 
@@ -325,7 +337,7 @@ jobs:
             # Thu thập log khi deploy thất bại
             echo "ERROR: Application health check failed."
 
-            docker compose --env-file .env -f Compose.yaml ps
-            docker compose --env-file .env -f Compose.yaml logs --tail=100
+            docker compose --env-file .env -f compose.yaml ps
+            docker compose --env-file .env -f compose.yaml logs --tail=100
 
             exit 1
