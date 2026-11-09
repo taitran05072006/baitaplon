@@ -135,7 +135,7 @@ jobs:
 
                         cd /opt/ontap
                         if [ ! -d .git ]; then
-                            git init git
+                            git init
                             git remote add origin https://github.com/taitran05072006/baitaplon.git
                         fi
 
@@ -156,7 +156,7 @@ jobs:
                         docker compose exec nginx nginx -t
                         docker compose exec nginx nginx -s reload
 
-                        for attempt in ${1..24}; do
+                        for attempt in {1..24}; do
                             if curl --fail --silent --show-error \
                                 --connect-timeout 5 --max-time 10 \
                                 http://localhost:8085/ >/dev/null \
