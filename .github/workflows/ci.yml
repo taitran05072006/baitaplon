@@ -271,7 +271,11 @@ jobs:
             fi
 
             # Kiểm tra cấu hình Nginx trước khi cập nhật
-            if ! docker compose --env-file .env -f compose.yaml run --rm --no-deps nginx nginx -t; then
+            if ! docker run --rm \
+              --add-host frontend:127.0.0.1 \
+              --add-host backend:127.0.0.1 \
+              -v "$PWD/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
+              nginx:stable nginx -t; then
               echo "ERROR: Nginx configuration is invalid."
               exit 1
             fi
