@@ -207,6 +207,7 @@ jobs:
 
             sudo chown "$(id -un):$(id -gn)" /opt/ontap
             sudo chown "$(id -un):$(id -gn)" /opt/ontap/nginx
+            rm -f /opt/ontap/Compose.yaml
 
       # 4. Copy file cấu hình bằng SCP
       - name: Copy deployment files
@@ -321,7 +322,7 @@ jobs:
               if curl --fail --silent \
                 --connect-timeout 5 \
                 --max-time 10 \
-                http://localhost:8080/api/actuator/health >/dev/null 2>&1; then
+                http://localhost:8080/api/health >/dev/null 2>&1; then
                 backend_ok=true
               fi
 
