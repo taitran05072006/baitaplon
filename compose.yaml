@@ -1,78 +1,56 @@
 services:
+  backend:
+    image: ${DOCKERHUB_USERNAME}/backend:${IMAGE_TAG}
+    container_name: taitran-backend
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: ontap
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: ${DOCKERHUB_USERNAME}/taitran-frontend:${IMAGE_TAG}
+    container_name: taitran-frontend
+    ports:
+      - "5174:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
   mysql:
     image: mysql:8.0
-    container_name: mysql-taitran
-    restart: unless-stopped
+    container_name: taitran-mysql
     environment:
-      - MYSQL_DATABASE=ontap
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-      - MYSQL_USER=taitran
-      - MYSQL_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ontap
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
     volumes:
       - mysql-data:/var/lib/mysql
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p${MYSQL_ROOT_PASSWORD}"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p\"$$MYSQL_ROOT_PASSWORD\""]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 30s
-    networks:
-      - database-network
-
-  front:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      args:
-        - VITE_API_URL=${VITE_API_URL:-/api}
-    container_name: front-taitran
-    expose:
-      - 80
-    restart: unless-stopped
-    depends_on:
-      - back
-    networks:
-      - proxy-network
-
-  back:
-    build:
-      context: ./demo
-      dockerfile: Dockerfile
-    container_name: back-taitran
-    restart: unless-stopped
-    environment:
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_DATABASE=ontap
-      - MYSQL_USER=taitran
-      - MYSQL_PASSWORD=${MYSQL_ROOT_PASSWORD}
-    depends_on:
-      mysql:
-        condition: service_healthy
-    networks:
-      - proxy-network
-      - database-network
-    expose:
-      - 8080
 
   nginx:
     image: nginx:stable
-    container_name: nginx-taitran
-    restart: unless-stopped
+    container_name: taitran-nginx
     ports:
-      - 80:80
+      - "8085:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - front
-      - back
-    networks:
-      - proxy-network
+      - backend
+      - frontend
+    restart: unless-stopped
 
-networks:
-  proxy-network:
-    driver: bridge
-  database-network:
-    driver: bridge
 volumes:
   mysql-data:
