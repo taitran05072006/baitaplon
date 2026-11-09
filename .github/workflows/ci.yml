@@ -104,87 +104,114 @@ jobs:
                         ${{ secrets.DOCKER_USERNAME }}/frontend:${{ github.sha }}
 
     deploy:
-        name: deploy to ubuntu VM
+        name: Deploy to Ubuntu VM
         needs: public
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         runs-on: ubuntu-latest
+
         environment:
             name: production
             url: http://ontap.taitran.me
 
         steps:
-            -   name: Connect to Tailscale
-                uses: tailscale/github-action@v3
-                with:
-                    oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-                    oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-                    tags: tag:ci
+      # 1. Checkout đúng commit kích hoạt workflow
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                ref: ${{ github.sha }}
 
-            -   name: SSH to VM
-                uses: appleboy/ssh-action@v1.2.0
-                with:
-                    host: ${{ secrets.SERVER_HOST }}
-                    username: ${{ secrets.SERVER_USER }}
-                    key: ${{ secrets.SERVER_SSH_KEY }}
-                    passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
-                    script_stop: true
-                    script: |
-                        set -eu
-                        sudo mkdir -p /opt/ontap
+      # 2. Kết nối Tailscale
+            - name: Connect to Tailscale
+              uses: tailscale/github-action@v3
+              with:
+                oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+                oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+                tags: tag:ci
 
-                        sudo chown -R ${{ secrets.SERVER_USER }} /opt/ontap
+      # 3. Tạo thư mục đích trên Ubuntu
+            - name: Prepare deployment directory
+              uses: appleboy/ssh-action@v1.2.0
+              with:
+                host: ${{ secrets.SERVER_HOST }}
+                username: ${{ secrets.SERVER_USER }}
+                key: ${{ secrets.SERVER_SSH_KEY }}
+                passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
+                script: |
+                    set -eu
+                    sudo mkdir -p /opt/ontap/nginx
+                    sudo chown -R "${{ secrets.SERVER_USER }}" /opt/ontap
 
-                        cd /opt/ontap
-                        if [ ! -d .git ]; then
-                            git init
-                            git remote add origin https://github.com/taitran05072006/baitaplon.git
-                        fi
+            - name: Copy deployment files
+              uses: appleboy/scp-action@v1
+              with:
+                host: ${{ secrets.SERVER_HOST }}
+                username: ${{ secrets.SERVER_USER }}
+                key: ${{ secrets.SERVER_SSH_KEY }}
+                passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
+                source: "Compose.yaml,nginx/nginx.conf"
+                target: "/opt/ontap"
+                overwrite: true
 
-                        git fetch --depth=1 origin "${{ github.sha }}"
+      # 5. SSH vào Ubuntu và triển khai
+            - name: Deploy application
+              uses: appleboy/ssh-action@v1.2.0
+              with:
+                host: ${{ secrets.SERVER_HOST }}
+                username: ${{ secrets.SERVER_USER }}
+                key: ${{ secrets.SERVER_SSH_KEY }}
+                passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
+                script: |
+                    set -eu
 
-                        mkdir -p nginx
-                        git show FETCH_HEAD:Compose.yaml > Compose.yaml
-                        git show FETCH_HEAD:nginx/nginx.conf > nginx/nginx.conf
+                    cd /opt/ontap
 
-                        export IMAGE_TAG="${{ github.sha }}"
-                        docker compose --env-file .env -f Compose.yaml pull
-                        docker compose --env-file .env -f Compose.yaml up \
-                            --detach \
-                            --remove-orphans \
-                            --pull never \
-                            --no-build
+                    # Sử dụng đúng tag image của commit hiện tại
+                    export IMAGE_TAG="${{ github.sha }}"
 
-                        docker compose exec nginx nginx -t
-                        docker compose exec nginx nginx -s reload
+                    # Kiểm tra cấu hình Docker Compose
+                    docker compose --env-file .env -f Compose.yaml config -q
 
-                        for attempt in {1..24}; do
-                            if curl --fail --silent --show-error \
-                                --connect-timeout 5 --max-time 10 \
-                                http://localhost:8085/ >/dev/null \
+                    # Tải các image đã được GitHub Actions build và push
+                    docker compose --env-file .env -f Compose.yaml pull
 
-                                &&
+                    # Khởi động/cập nhật các container
+                    docker compose --env-file .env -f Compose.yaml up \
+                    --detach \
+                    --remove-orphans \
+                    --pull never \
+                    --no-build
 
-                            curl --fail --silent --show-error \
-                                --connect-timeout 5 --max-time 10 \
-                                http://localhost:8080/api/actuator/health >/dev/null; then
-                                echo "All services are healthy."
-                                exit 0
-                            fi
+                    # Kiểm tra cấu hình Nginx trong container
+                    docker compose --env-file .env -f Compose.yaml exec -T nginx nginx -t
 
-                            sleep 5
-                        done
+                    # Reload Nginx
+                    docker compose --env-file .env -f Compose.yaml exec -T nginx nginx -s reload
 
-                        echo "Deployment failed: services did not become healthy within the expected time frame."
-                        docker compose --env-file .env -f Compose.yaml ps
-                        docker compose --env-file .env -f Compose.yaml logs --tail=100
-                        exit 1
+                    # Health check
+                    attempt=1
 
+                    while [ "$attempt" -le 24 ]; do
+                    if curl --fail --silent \
+                        --connect-timeout 5 --max-time 10 \
+                        http://localhost:8085/ >/dev/null 2>&1 \
+                        &&
+                        curl --fail --silent \
+                        --connect-timeout 5 --max-time 10 \
+                        http://localhost:8080/api/actuator/health >/dev/null 2>&1; then
 
+                        echo "All services are healthy."
+                        exit 0
+                    fi
 
+                    echo "Health check attempt $attempt/24 failed."
 
+                    sleep 5
+                    attempt=$((attempt + 1))
+                    done
 
+                    echo "Deployment failed."
 
+                    docker compose --env-file .env -f Compose.yaml ps
+                    docker compose --env-file .env -f Compose.yaml logs --tail=100
 
-
-
-
-
+                    exit 1
