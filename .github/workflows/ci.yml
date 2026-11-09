@@ -1,217 +1,331 @@
-name: taitran
+
+name: taitran-ci-cd
 
 on:
-    push:
-        branches:
-            - main
-    pull_request:
-        branches:
-            - main
-    workflow_dispatch:
+  push:
+    branches:
+      - "**"
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
 
 permissions:
-    contents: read
+  contents: read
 
+# Tránh nhiều workflow cùng triển khai đồng thời.
 concurrency:
-    group: ci
-    cancel-in-progress: false
+  group: taitran-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-    test:
-        name: test backend and build frontend
-        runs-on: ubuntu-latest
 
-        services:
-            mysql:
-                image: mysql:8.0
-                env:
-                    MYSQL_DATABASE: baitaplon
-                    MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-                ports:
-                    - 3306:3306
-                options: >-
-                    --health-cmd="mysqladmin ping -h localhost -u root -p${MYSQL_ROOT_PASSWORD}"
-                    --health-interval=10s
-                    --health-timeout=5s
-                    --health-retries=10
-        steps:
-            -   name: Checkout code
-                uses: actions/checkout@v3
-            -   name: setup Java
-                uses: actions/setup-java@v4
-                with:
-                    distribution: temurin
-                    java-version: 25
-                    cache: maven
-            -   name: test backend
-                working-directory: ./demo
-                env:
-                    DB_HOST: localhost
-                    DB_PORT: 3306
-                    DB_NAME: baitaplon
-                    DB_USERNAME: root
-                    DB_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-                run: ./mvnw -B test
+  # ==========================================
+  # JOB 1: TEST BACKEND + BUILD FRONTEND
+  # ==========================================
+  test:
+    name: Test backend and build frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
 
-            -   name: setup Node.js
-                uses: actions/setup-node@v4
-                with:
-                    node-version: 20
-                    cache: npm
-                    cache-dependency-path: ./frontend/package-lock.json
-            -   name: build frontend
-                working-directory: ./frontend
-                run: |
-                    npm ci
-                    npm run build
+    services:
+      mysql:
+        image: mysql:8.0
 
-    public:
-        name: build and deploy images
-        needs: test
-        if: github.event_name == 'push'
-        runs-on: ubuntu-latest
+        env:
+          MYSQL_DATABASE: baitaplon
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
 
-        steps:
-            -   name: Checkout code
-                uses: actions/checkout@v4
+        ports:
+          - 3306:3306
 
-            -   name: login to DockerHub
-                uses: docker/login-action@v3
-                with:
-                    username: ${{ secrets.DOCKER_USERNAME }}
-                    password: ${{ secrets.DOCKERHUB_TOKEN }}
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p\"$MYSQL_ROOT_PASSWORD\""
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=30s
 
-            -   name: setup Docker Buildx
-                uses: docker/setup-buildx-action@v3
+    steps:
 
-            -   name: build and push images
-                uses: docker/build-push-action@v6
-                with:
-                    context: ./demo
-                    push: true
-                    platforms: linux/amd64,linux/arm64
-                    tags: |
-                        ${{ secrets.DOCKER_USERNAME }}/backend:latest
-                        ${{ secrets.DOCKER_USERNAME }}/backend:${{ github.sha }}
-            -   name: build and push frontend images
-                uses: docker/build-push-action@v6
-                with:
-                    context: ./frontend
-                    push: true
-                    platforms: linux/amd64, linux/arm64
-                    tags: |
-                        ${{ secrets.DOCKER_USERNAME }}/frontend:latest
-                        ${{ secrets.DOCKER_USERNAME }}/frontend:${{ github.sha }}
+      - name: Checkout source code
+        uses: actions/checkout@v4
 
-    deploy:
-        name: Deploy to Ubuntu VM
-        needs: public
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        runs-on: ubuntu-latest
+      # Java
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+          cache-dependency-path: demo/pom.xml
 
-        environment:
-            name: production
-            url: http://ontap.taitran.me
+      # Backend tests
+      - name: Test backend
+        working-directory: ./demo
+        env:
+          DB_HOST: localhost
+          DB_PORT: 3306
+          DB_NAME: baitaplon
+          DB_USERNAME: root
+          DB_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
 
-        steps:
-      # 1. Checkout đúng commit kích hoạt workflow
-            - name: Checkout code
-              uses: actions/checkout@v4
-              with:
-                ref: ${{ github.sha }}
+        run: |
+          chmod +x ./mvnw
+          ./mvnw -B test
+
+      # Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Frontend build
+      - name: Build frontend
+        working-directory: ./frontend
+        run: |
+          npm ci
+          npm run build
+
+
+  # ==========================================
+  # JOB 2: BUILD AND PUSH DOCKER IMAGES
+  # ==========================================
+  public:
+    name: Build and push Docker images
+
+    needs: test
+
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      # Docker Hub login
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Buildx
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Backend image
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./demo
+          push: true
+          platforms: linux/amd64,linux/arm64
+
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/backend:${{ github.sha }}
+            ${{ secrets.DOCKER_USERNAME }}/backend:latest
+
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      # Frontend image
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          platforms: linux/amd64,linux/arm64
+
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/frontend:${{ github.sha }}
+            ${{ secrets.DOCKER_USERNAME }}/frontend:latest
+
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+
+  # ==========================================
+  # JOB 3: DEPLOY TO UBUNTU VM
+  # ==========================================
+  deploy:
+    name: Deploy to Ubuntu VM
+
+    needs: public
+
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    environment:
+      name: production
+      url: http://ontap.taitran.me
+
+    steps:
+
+      # 1. Checkout đúng commit
+      - name: Checkout deployment files
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       # 2. Kết nối Tailscale
-            - name: Connect to Tailscale
-              uses: tailscale/github-action@v3
-              with:
-                oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-                oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-                tags: tag:ci
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
 
-      # 3. Tạo thư mục đích trên Ubuntu
-            - name: Prepare deployment directory
-              uses: appleboy/ssh-action@v1.2.0
-              with:
-                host: ${{ secrets.SERVER_HOST }}
-                username: ${{ secrets.SERVER_USER }}
-                key: ${{ secrets.SERVER_SSH_KEY }}
-                passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
-                script: |
-                    set -eu
-                    sudo mkdir -p /opt/ontap/nginx
-                    sudo chown -R "${{ secrets.SERVER_USER }}" /opt/ontap
+      # 3. Chuẩn bị thư mục trên Ubuntu
+      - name: Prepare deployment directory
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
 
-            - name: Copy deployment files
-              uses: appleboy/scp-action@v1
-              with:
-                host: ${{ secrets.SERVER_HOST }}
-                username: ${{ secrets.SERVER_USER }}
-                key: ${{ secrets.SERVER_SSH_KEY }}
-                passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
-                source: "Compose.yaml,nginx/nginx.conf"
-                target: "/opt/ontap"
-                overwrite: true
+          script: |
+            set -eu
 
-      # 5. SSH vào Ubuntu và triển khai
-            - name: Deploy application
-              uses: appleboy/ssh-action@v1.2.0
-              with:
-                host: ${{ secrets.SERVER_HOST }}
-                username: ${{ secrets.SERVER_USER }}
-                key: ${{ secrets.SERVER_SSH_KEY }}
-                passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
-                script: |
-                    set -eu
+            sudo mkdir -p /opt/ontap/nginx
 
-                    cd /opt/ontap
+            sudo chown "$(id -un):$(id -gn)" /opt/ontap
+            sudo chown "$(id -un):$(id -gn)" /opt/ontap/nginx
 
-                    # Sử dụng đúng tag image của commit hiện tại
-                    export IMAGE_TAG="${{ github.sha }}"
+      # 4. Copy file cấu hình bằng SCP
+      - name: Copy deployment files
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
 
-                    # Kiểm tra cấu hình Docker Compose
-                    docker compose --env-file .env -f Compose.yaml config -q
+          source: "Compose.yaml,nginx/nginx.conf"
+          target: "/opt/ontap"
+          overwrite: true
 
-                    # Tải các image đã được GitHub Actions build và push
-                    docker compose --env-file .env -f Compose.yaml pull
+      # 5. Triển khai ứng dụng
+      - name: Deploy application
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
 
-                    # Khởi động/cập nhật các container
-                    docker compose --env-file .env -f Compose.yaml up \
-                    --detach \
-                    --remove-orphans \
-                    --pull never \
-                    --no-build
+          script: |
+            set -eu
 
-                    # Kiểm tra cấu hình Nginx trong container
-                    docker compose --env-file .env -f Compose.yaml exec -T nginx nginx -t
+            cd /opt/ontap
 
-                    # Reload Nginx
-                    docker compose --env-file .env -f Compose.yaml exec -T nginx nginx -s reload
+            echo "Starting deployment..."
 
-                    # Health check
-                    attempt=1
+            # Sử dụng image của commit hiện tại
+            export IMAGE_TAG="${{ github.sha }}"
 
-                    while [ "$attempt" -le 24 ]; do
-                    if curl --fail --silent \
-                        --connect-timeout 5 --max-time 10 \
-                        http://localhost:8085/ >/dev/null 2>&1 \
-                        &&
-                        curl --fail --silent \
-                        --connect-timeout 5 --max-time 10 \
-                        http://localhost:8080/api/actuator/health >/dev/null 2>&1; then
+            # Kiểm tra file môi trường
+            if [ ! -f .env ]; then
+              echo "ERROR: /opt/ontap/.env does not exist."
+              exit 1
+            fi
 
-                        echo "All services are healthy."
-                        exit 0
-                    fi
+            # Kiểm tra cấu hình Compose
+            if ! docker compose --env-file .env -f Compose.yaml config -q; then
+              echo "ERROR: Docker Compose configuration is invalid."
+              exit 1
+            fi
 
-                    echo "Health check attempt $attempt/24 failed."
+            # Pull image từ Docker Hub
+            if ! docker compose --env-file .env -f Compose.yaml pull; then
+              echo "ERROR: Failed to pull Docker images."
+              exit 1
+            fi
 
-                    sleep 5
-                    attempt=$((attempt + 1))
-                    done
+            # Kiểm tra cấu hình Nginx trước khi cập nhật
+            if ! docker compose --env-file .env -f Compose.yaml run --rm --no-deps nginx nginx -t; then
+              echo "ERROR: Nginx configuration is invalid."
+              exit 1
+            fi
 
-                    echo "Deployment failed."
+            # Cập nhật container
+            if ! docker compose --env-file .env -f Compose.yaml up \
+              --detach \
+              --remove-orphans \
+              --pull never \
+              --no-build; then
 
-                    docker compose --env-file .env -f Compose.yaml ps
-                    docker compose --env-file .env -f Compose.yaml logs --tail=100
+              echo "ERROR: Docker Compose deployment failed."
+              docker compose --env-file .env -f Compose.yaml ps
+              docker compose --env-file .env -f Compose.yaml logs --tail=100
+              exit 1
+            fi
 
-                    exit 1
+            # Reload Nginx để nhận cấu hình mới
+            if ! docker compose --env-file .env -f Compose.yaml exec -T nginx nginx -s reload; then
+              echo "ERROR: Nginx reload failed."
+              docker compose --env-file .env -f Compose.yaml logs --tail=100 nginx
+              exit 1
+            fi
+
+            # Health check
+            echo "Checking application health..."
+
+            attempt=1
+            max_attempts=24
+
+            while [ "$attempt" -le "$max_attempts" ]; do
+
+              frontend_ok=false
+              backend_ok=false
+
+              if curl --fail --silent \
+                --connect-timeout 5 \
+                --max-time 10 \
+                http://localhost:8085/ >/dev/null 2>&1; then
+                frontend_ok=true
+              fi
+
+              if curl --fail --silent \
+                --connect-timeout 5 \
+                --max-time 10 \
+                http://localhost:8080/api/actuator/health >/dev/null 2>&1; then
+                backend_ok=true
+              fi
+
+              if [ "$frontend_ok" = true ] && [ "$backend_ok" = true ]; then
+                echo "SUCCESS: Frontend and backend are healthy."
+                exit 0
+              fi
+
+              echo "Health check $attempt/$max_attempts failed."
+              echo "Frontend: $frontend_ok"
+              echo "Backend: $backend_ok"
+
+              sleep 5
+              attempt=$((attempt + 1))
+            done
+
+            # Thu thập log khi deploy thất bại
+            echo "ERROR: Application health check failed."
+
+            docker compose --env-file .env -f Compose.yaml ps
+            docker compose --env-file .env -f Compose.yaml logs --tail=100
+
+            exit 1
