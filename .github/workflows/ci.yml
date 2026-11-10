@@ -268,4 +268,5 @@ jobs:
           ansible-playbook \
             -i inventory/hosts.yml \
             playbooks/deploy.yml \
-            -e "image_tag=${IMAGE_TAG}"
+            -e "image_tag=${IMAGE_TAG}" \
+            -e "ansible_become_password=${ANSIBLE_BECOME_PASSWORD}"
