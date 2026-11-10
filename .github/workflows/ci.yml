@@ -21,10 +21,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-
-  # ==========================================
-  # JOB 1: TEST BACKEND + BUILD FRONTEND
-  # ==========================================
   test:
     name: Test backend and build frontend
     runs-on: ubuntu-latest
@@ -156,12 +152,8 @@ jobs:
           cache-to: type=gha,mode=max,scope=frontend
 
 
-  # ==========================================
-  # JOB 3: DEPLOY TO UBUNTU VM
-  # ==========================================
   deploy:
     name: Deploy to Ubuntu VM
-
     needs: public
 
     if: >-
@@ -176,14 +168,11 @@ jobs:
       url: http://ontap.taitran.me
 
     steps:
-
-      # 1. Checkout đúng commit
       - name: Checkout deployment files
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
 
-      # 2. Kết nối Tailscale
       - name: Connect to Tailscale
         uses: tailscale/github-action@v3
         with:
@@ -191,158 +180,81 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
-      # 3. Chuẩn bị thư mục trên Ubuntu
-      - name: Prepare deployment directory
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
+          python-version: '3.x'
 
-          script: |
-            set -eu
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible-core
+          ansible-galaxy collection install -r ansible/requirements.yml
 
-            sudo mkdir -p /opt/ontap/nginx
-
-            sudo chown "$(id -un):$(id -gn)" /opt/ontap
-            sudo chown "$(id -un):$(id -gn)" /opt/ontap/nginx
-            rm -f /opt/ontap/Compose.yaml
-
-      # 4. Copy file cấu hình bằng SCP
-      - name: Copy deployment files
-        uses: appleboy/scp-action@v1
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
-
-          source: "compose.yaml,nginx/nginx.conf"
-          target: "/opt/ontap"
-          overwrite: true
-
-      # 5. Triển khai ứng dụng
-      - name: Deploy application
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Configure SSH and run Ansible
         env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_SSH_PASSPHRASE: ${{ secrets.SERVER_SSH_PASSPHRASE }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE }}
-          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN
+          IMAGE_TAG: ${{ github.sha }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
 
-          script: |
-            set -eu
+        run: |
+          set -eu
+          export ANSIBLE_CONFIG="$GITHUB_WORKSPACE/ansible/ansible.cfg"
+          export ANSIBLE_ROLES_PATH="$GITHUB_WORKSPACE/ansible/roles"
+          cd "$GITHUB_WORKSPACE/ansible"
 
-            cd /opt/ontap
+          : "${SERVER_HOST:?SERVER_HOST secret is required}"
+          : "${SERVER_USER:?SERVER_USER secret is required}"
+          : "${SERVER_SSH_KEY:?SERVER_SSH_KEY secret is required}"
+          : "${DOCKERHUB_USERNAME:?DOCKER_USERNAME secret is required}"
+          : "${DOCKERHUB_TOKEN:?DOCKERHUB_TOKEN secret is required}"
+          : "${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD secret is required}"
 
-            echo "Starting deployment..."
+          # Prepare SSH key
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
 
-            # Sử dụng image của commit hiện tại
-            export IMAGE_TAG="${{ github.sha }}"
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
 
-            # Kiểm tra file môi trường
-            if [ ! -f .env ]; then
-              echo "ERROR: /opt/ontap/.env does not exist."
-              exit 1
-            fi
+          # Start SSH agent
+          eval "$(ssh-agent -s)"
 
-            # Authenticate the VM before pulling private application images.
-            if ! printf '%s' "$DOCKERHUB_TOKEN" | docker login \
-              --username "$DOCKERHUB_USERNAME" \
-              --password-stdin; then
-              echo "ERROR: Docker Hub authentication failed."
-              exit 1
-            fi
+          # Load passphrase-protected private key
+          cat > ~/.ssh/askpass.sh <<'EOF'
+          #!/bin/sh
+          printf '%s\n' "$SERVER_SSH_PASSPHRASE"
+          EOF
 
-            # Kiểm tra cấu hình Compose
-            if ! docker compose --env-file .env -f compose.yaml config -q; then
-              echo "ERROR: Docker Compose configuration is invalid."
-              exit 1
-            fi
+          chmod 700 ~/.ssh/askpass.sh
 
-            # Pull image từ Docker Hub
-            if ! docker compose --env-file .env -f compose.yaml pull; then
-              echo "ERROR: Failed to pull Docker images."
-              exit 1
-            fi
+          export SSH_ASKPASS="$HOME/.ssh/askpass.sh"
+          export SSH_ASKPASS_REQUIRE=force
+          export DISPLAY=:0
 
-            # Kiểm tra cấu hình Nginx trước khi cập nhật
-            if ! docker run --rm \
-              --add-host frontend:127.0.0.1 \
-              --add-host backend:127.0.0.1 \
-              -v "$PWD/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
-              nginx:stable nginx -t; then
-              echo "ERROR: Nginx configuration is invalid."
-              exit 1
-            fi
+          setsid -w ssh-add ~/.ssh/deploy_key </dev/null
 
-            # Cập nhật container
-            if ! docker compose --env-file .env -f compose.yaml up \
-              --detach \
-              --remove-orphans \
-              --pull never \
-              --no-build; then
+          # Create Ansible inventory
+          mkdir -p inventory
 
-              echo "ERROR: Docker Compose deployment failed."
-              docker compose --env-file .env -f compose.yaml ps
-              docker compose --env-file .env -f compose.yaml logs --tail=100
-              exit 1
-            fi
+          cat > inventory/hosts.yml <<EOF
+          all:
+            children:
+              app:
+                hosts:
+                  ontap:
+                    ansible_host: "${SERVER_HOST}"
+                    ansible_user: "${SERVER_USER}"
+                    ansible_connection: ssh
+          EOF
 
-            # Reload Nginx để nhận cấu hình mới
-            if ! docker compose --env-file .env -f compose.yaml exec -T nginx nginx -s reload; then
-              echo "ERROR: Nginx reload failed."
-              docker compose --env-file .env -f compose.yaml logs --tail=100 nginx
-              exit 1
-            fi
-
-            # Health check
-            echo "Checking application health..."
-
-            attempt=1
-            max_attempts=24
-
-            while [ "$attempt" -le "$max_attempts" ]; do
-
-              frontend_ok=false
-              backend_ok=false
-
-              if curl --fail --silent \
-                --connect-timeout 5 \
-                --max-time 10 \
-                http://localhost:8085/ >/dev/null 2>&1; then
-                frontend_ok=true
-              fi
-
-              if curl --fail --silent \
-                --connect-timeout 5 \
-                --max-time 10 \
-                http://localhost:8080/api/health >/dev/null 2>&1; then
-                backend_ok=true
-              fi
-
-              if [ "$frontend_ok" = true ] && [ "$backend_ok" = true ]; then
-                echo "SUCCESS: Frontend and backend are healthy."
-                exit 0
-              fi
-
-              echo "Health check $attempt/$max_attempts failed."
-              echo "Frontend: $frontend_ok"
-              echo "Backend: $backend_ok"
-
-              sleep 5
-              attempt=$((attempt + 1))
-            done
-
-            # Thu thập log khi deploy thất bại
-            echo "ERROR: Application health check failed."
-
-            docker compose --env-file .env -f compose.yaml ps
-            docker compose --env-file .env -f compose.yaml logs --tail=100
-
-            exit 1
+          # Run Ansible deployment
+          ansible-playbook \
+            -i inventory/hosts.yml \
+            playbooks/deploy.yml \
+            -e "image_tag=${IMAGE_TAG}"

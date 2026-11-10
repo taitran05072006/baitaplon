@@ -1,0 +1,13 @@
+---
+timezone: Asia/Ho_Chi_Minh
+
+app_dir: /opt/ontap
+
+common_packages:
+  - git
+  - curl
+  - ca-certificates
+  - htop
+  - jq
+  - unzip
+  - vim

@@ -1,0 +1,9 @@
+---
+- name: Provision and configure Docker
+  hosts: all
+  become: true
+  roles:
+    - docker
+    - deploy
+    - firewall
+    - common

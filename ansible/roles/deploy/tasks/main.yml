@@ -1,0 +1,91 @@
+---
+- name: Create application directory
+  ansible.builtin.file:
+    path: "{{ app_dir }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+
+- name: Remove legacy Compose filename
+  ansible.builtin.file:
+    path: "{{ app_dir }}/Compose.yaml"
+    state: absent
+
+- name: Copy Docker compose
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../compose.yaml"
+    dest: "{{ app_dir }}/compose.yaml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+
+- name: Create nginx configuration directory
+  ansible.builtin.file:
+    path: "{{ app_dir }}/nginx"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+
+- name: Copy nginx configuration
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../nginx/nginx.conf"
+    dest: "{{ app_dir }}/nginx/nginx.conf"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+
+- name: Render application environment file
+  ansible.builtin.template:
+    src: "env.j2"
+    dest: "{{ app_dir }}/.env"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0600'
+  no_log: true
+
+- name: Authenticate Docker Hub
+  ansible.builtin.command:
+    cmd: docker login --username "{{ lookup('env', 'DOCKERHUB_USERNAME') }}" --password-stdin
+    stdin: "{{ lookup('env', 'DOCKERHUB_TOKEN') }}"
+  no_log: true
+  changed_when: false
+
+- name: Validate Docker Compose configuration
+  ansible.builtin.command:
+    cmd: docker compose --env-file .env -f compose.yaml config -q
+    chdir: "{{ app_dir }}"
+  changed_when: false
+
+- name: Pull application images
+  ansible.builtin.command:
+    cmd: docker compose --env-file .env -f compose.yaml pull
+    chdir: "{{ app_dir }}"
+  register: pull_result
+  changed_when: "'Downloaded newer image' in pull_result.stdout"
+
+- name: Start application
+  ansible.builtin.command:
+    cmd: docker compose --env-file .env -f compose.yaml up  --detach --remove-orphans
+    chdir: "{{ app_dir }}"
+  register: up_result
+  changed_when: "'Creating' in up_result.stdout or 'Starting' in up_result.stdout"
+
+- name: Wait for frontend to become healthy
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8085/
+    status_code: 200
+  register: frontend_health
+  until: frontend_health is succeeded
+  retries: 24
+  delay: 5
+
+- name: Wait for backend to become healthy
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/health
+    status_code: 200
+  register: backend_health
+  until: backend_health is succeeded
+  retries: 24
+  delay: 5
