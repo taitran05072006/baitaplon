@@ -252,10 +252,13 @@ jobs:
 
           echo "Checking sudo access on deployment host..."
           if ! printf '%s\n' "$ANSIBLE_BECOME_PASSWORD" | \
-            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            ssh -i ~/.ssh/deploy_key \
+              -o IdentitiesOnly=yes \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=accept-new \
               "$SERVER_USER@$SERVER_HOST" "sudo -S -k -v"; then
-            echo "ERROR: SERVER_SUDO_PASSWORD is invalid, or the SSH user cannot use sudo non-interactively."
-            echo "Verify the password with 'sudo -k -v' on the server."
+            echo "ERROR: SSH authentication or sudo validation failed."
+            echo "Verify SERVER_HOST, SERVER_USER, SERVER_SSH_KEY, and SERVER_SUDO_PASSWORD."
             exit 1
           fi
 
