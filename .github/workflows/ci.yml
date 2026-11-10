@@ -201,6 +201,7 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           IMAGE_TAG: ${{ github.sha }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          ANSIBLE_BECOME_PASSWORD: ${{ secrets.SERVER_SUDO_PASSWORD }}
 
         run: |
           set -eu
@@ -214,6 +215,7 @@ jobs:
           : "${DOCKERHUB_USERNAME:?DOCKER_USERNAME secret is required}"
           : "${DOCKERHUB_TOKEN:?DOCKERHUB_TOKEN secret is required}"
           : "${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD secret is required}"
+          : "${ANSIBLE_BECOME_PASSWORD:?SERVER_SUDO_PASSWORD secret is required}"
 
           echo "Tailscale addresses:"
           tailscale ip -4

@@ -72,6 +72,45 @@
   register: up_result
   changed_when: "'Creating' in up_result.stdout or 'Starting' in up_result.stdout"
 
+- name: Install host Nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install ONTAP host Nginx site
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../nginx/ontap/ontap.conf"
+    dest: /etc/nginx/sites-available/ontap
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart host Nginx
+
+- name: Disable default host Nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Restart host Nginx
+
+- name: Enable ONTAP host Nginx site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/ontap
+    dest: /etc/nginx/sites-enabled/ontap
+    state: link
+  notify: Restart host Nginx
+
+- name: Validate host Nginx configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Ensure host Nginx is enabled and started
+  ansible.builtin.service:
+    name: nginx
+    enabled: true
+    state: started
+
 - name: Wait for frontend to become healthy
   ansible.builtin.uri:
     url: http://127.0.0.1:8085/
