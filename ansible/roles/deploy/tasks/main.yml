@@ -60,9 +60,12 @@
 
 - name: Pull application images
   ansible.builtin.command:
-    cmd: docker compose --env-file .env -f compose.yaml pull
+    cmd: docker compose --env-file .env -f compose.yaml pull --quiet
     chdir: "{{ app_dir }}"
   register: pull_result
+  retries: 3
+  delay: 10
+  until: pull_result.rc == 0
   changed_when: "'Downloaded newer image' in pull_result.stdout"
 
 - name: Start application
