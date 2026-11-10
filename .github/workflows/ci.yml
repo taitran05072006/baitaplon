@@ -250,6 +250,15 @@ jobs:
 
           setsid -w ssh-add ~/.ssh/deploy_key </dev/null
 
+          echo "Checking sudo access on deployment host..."
+          if ! printf '%s\n' "$ANSIBLE_BECOME_PASSWORD" | \
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              "$SERVER_USER@$SERVER_HOST" "sudo -S -k -v"; then
+            echo "ERROR: SERVER_SUDO_PASSWORD is invalid, or the SSH user cannot use sudo non-interactively."
+            echo "Verify the password with 'sudo -k -v' on the server."
+            exit 1
+          fi
+
           # Create Ansible inventory
           mkdir -p inventory
 
