@@ -164,7 +164,7 @@ jobs:
     timeout-minutes: 20
 
     environment:
-      name: production
+      name: baitaplon
       url: http://ontap.taitran.me
 
     steps:
