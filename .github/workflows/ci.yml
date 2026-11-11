@@ -217,15 +217,6 @@ jobs:
           : "${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD secret is required}"
           : "${ANSIBLE_BECOME_PASSWORD:?SERVER_SUDO_PASSWORD secret is required}"
 
-          echo "Tailscale addresses:"
-          tailscale ip -4
-          echo "Checking SSH connectivity to deployment host..."
-          if ! timeout 15 bash -c "</dev/tcp/$SERVER_HOST/22"; then
-            echo "ERROR: Cannot reach $SERVER_HOST on TCP port 22."
-            echo "SERVER_HOST must be the server's Tailscale IP or MagicDNS hostname."
-            exit 1
-          fi
-
           # Prepare SSH key
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
@@ -250,17 +241,7 @@ jobs:
 
           setsid -w ssh-add ~/.ssh/deploy_key </dev/null
 
-          echo "Checking sudo access on deployment host..."
-          if ! printf '%s\n' "$ANSIBLE_BECOME_PASSWORD" | \
-            ssh -i ~/.ssh/deploy_key \
-              -o IdentitiesOnly=yes \
-              -o BatchMode=yes \
-              -o StrictHostKeyChecking=accept-new \
-              "$SERVER_USER@$SERVER_HOST" "sudo -S -k -v"; then
-            echo "ERROR: SSH authentication or sudo validation failed."
-            echo "Verify SERVER_HOST, SERVER_USER, SERVER_SSH_KEY, and SERVER_SUDO_PASSWORD."
-            exit 1
-          fi
+
 
           # Create Ansible inventory
           mkdir -p inventory
