@@ -9,12 +9,12 @@
 
 - name: Remove legacy Compose filename
   ansible.builtin.file:
-    path: "{{ app_dir }}/Compose.yaml"
+    path: "{{ app_dir }}/compose.yaml"
     state: absent
 
 - name: Copy Docker compose
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../compose.yaml"
+  ansible.builtin.template:
+    src: "compose.yaml.j2"
     dest: "{{ app_dir }}/compose.yaml"
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
@@ -29,8 +29,8 @@
     mode: '0755'
 
 - name: Copy nginx configuration
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../nginx/nginx.conf"
+  ansible.builtin.template:
+    src: "nginx.conf.j2"
     dest: "{{ app_dir }}/nginx/nginx.conf"
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
@@ -82,9 +82,9 @@
     update_cache: true
     cache_valid_time: 3600
 
-- name: Install ONTAP host Nginx site
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../nginx/ontap/ontap.conf"
+- name: Render ONTAP host Nginx site
+  ansible.builtin.template:
+    src: "ontap.conf.j2"
     dest: /etc/nginx/sites-available/ontap
     owner: root
     group: root
