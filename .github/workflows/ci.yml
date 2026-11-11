@@ -253,20 +253,6 @@ jobs:
             exit 1
           fi
 
-          # Create Ansible inventory
-          mkdir -p inventory
-
-          cat > inventory/hosts.yml <<EOF
-          all:
-            children:
-              app:
-                hosts:
-                  ontap:
-                    ansible_host: "${SERVER_HOST}"
-                    ansible_user: "${SERVER_USER}"
-                    ansible_connection: ssh
-          EOF
-
           # Run Ansible deployment
           ansible-playbook \
             -i inventory/hosts.yml \
