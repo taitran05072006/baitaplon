@@ -4,6 +4,19 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Enable network time synchronization before using APT
+      ansible.builtin.raw: |
+        timedatectl set-ntp true
+        for attempt in $(seq 1 60); do
+          if [ "$(timedatectl show --property=NTPSynchronized --value)" = "yes" ]; then
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "The system clock did not synchronize with an NTP server." >&2
+        exit 1
+      changed_when: false
+
     - name: Install Python 3 on Debian-based hosts
       ansible.builtin.raw: |
         test -x /usr/bin/python3 || (
