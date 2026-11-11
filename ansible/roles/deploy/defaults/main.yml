@@ -1,3 +1,3 @@
 app_dir: /opt/ontap
 host_nginx_server_name: trangiatai.duckdns.org
-host_nginx_proxy_pass: http://127.0.0.1:5173
+host_nginx_proxy_pass: http://127.0.0.1:8085
